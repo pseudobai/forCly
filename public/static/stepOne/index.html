@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>宝宝</title>
+    <meta name="language" content="zh-CN">
+    <meta name="title" content="小宝宝">
+    <meta name="github" content="https://github.com/sun0225SUN/Awesome-Love-Code">
+    <meta name="describe" content="收集不易，您的star是我坚持的动力，同时也欢迎各位PR哦! ">
+    <link rel="icon" type="image/x-icon" href="https://cdn.jsdelivr.net/gh/sun0225SUN/photos/img/20210715233345.png">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        .city {
+            width: 100%;
+            position: fixed;
+            bottom: 0px;
+            z-index: 100;
+        }
+
+        .city img {
+            width: 100%;
+        }
+
+        audio {
+            opacity: 0;
+        }
+
+        .hide {
+            display: none;
+        }
+    </style>
+    <title>放烟花</title>
+    <link href="modal.css" rel="stylesheet" />
+</head>
+
+<body onselectstart="return false">
+    <div class="share_img"><img src="a8b.png" alt=""></div>
+    <canvas id='cas' style="background-color:rgba(0,5,24,1)">浏览器不支持canvas</canvas>
+    <div class="city"><img src="city.png" alt="" /></div>
+    <img src="moon.png" alt="" id="moon" style="visibility: hidden;" />
+    <div style="display:none">
+        <div class="shape">曹玲钰</div>
+        <div class="shape">新年快乐</div>
+        <div class="shape">开心每一天</div>
+        <div class="shape"><img src="usr1.jpg" alt="用户自定义图片"></div>
+        <div class="shape"><img src="usr2.jpg" alt="用户自定义图片"></div>
+        <div class="shape"><img src="usr3.jpg" alt="用户自定义图片"></div>
+        <div class="shape"><img src="usr4.jpg" alt="用户自定义图片"></div>
+        <div class="shape"><img src="usr5.jpg" alt="用户自定义图片"></div>
+        <div class="shape"><img src="usr6.jpg" alt="用户自定义图片"></div>
+    </div>
+    <audio autoplay loop id="music">
+        <source src="music.mp3" type="audio/mpeg" />
+    </audio>
+    <iframe id="iframMusic" allow="autoplay" style="display:none" src="blank.mp3"></iframe>
+
+    <script src="jquery.min.js"></script>
+    <script>
+        // ========== 全局变量与性能配置（重点：适配大图片的性能参数） ==========
+        const canvas = document.getElementById("cas");
+        const ctx = canvas.getContext("2d");
+        const ocas = document.createElement("canvas"); // 离屏Canvas：文字/图片像素提取
+        const octx = ocas.getContext("2d");
+        const moonImg = document.getElementById("moon");
+        const music = document.getElementById("music");
+        const iframMusic = document.getElementById("iframMusic");
+
+        // 缓存DOM：只查询一次，减少性能消耗
+        const shapeList = document.querySelectorAll(".shape");
+        // 核心配置：适配大图片，平衡性能
+        const config = {
+            maxFireworks: 12, // 最大同时存在的烟花数量（适度减少，抵消大图片消耗）
+            fireworkInterval: 350, // 烟花生成间隔（更短，保证频率）
+            baseFragStep: 3, // 基础像素提取步长（更小，保证大图片清晰度）
+            normalFragRange: [30, 80], // 普通烟花碎片数量（大幅减少，释放性能）
+            maskOpacity: 0.04, // 遮罩透明度（更低，减少绘制开销）
+            starCount: 50, // 星星数量（更少，释放性能）
+            fragGravity: 0.2, // 碎片下落重力（适度调大，加速碎片清理）
+            fragSpeed: 0.12, // 碎片移动速度（适度调大，加快碎片到达目标）
+            imgScaleRatio: 0.8 // 图片占画布的比例（0.8=80%，避免完全贴边，可改1）
+        };
+
+        // ========== 内存管理（核心：清理无用对象，解决卡顿） ==========
+        let bigbooms = []; // 烟花主对象数组
+        let stars = []; // 星星数组
+        // 离屏Canvas：静态背景（星星+月亮），只绘制一次，复用减少绘制开销
+        let staticBgCanvas = document.createElement("canvas");
+        let staticBgCtx = staticBgCanvas.getContext("2d");
+
+        // ========== 工具函数：计算图片撑满画布且不拉伸的尺寸（核心） ==========
+        /**
+         * 计算图片的最大显示尺寸（撑满画布且不拉伸）
+         * @param {number} imgWidth 图片原始宽度
+         * @param {number} imgHeight 图片原始高度
+         * @param {number} canvasWidth 画布宽度
+         * @param {number} canvasHeight 画布高度
+         * @param {number} ratio 图片占画布的比例（0-1）
+         * @returns {object} 计算后的宽度、高度、x坐标、y坐标
+         */
+        function getImageFitSize(imgWidth, imgHeight, canvasWidth, canvasHeight, ratio = 1) {
+            // 缩放画布尺寸（按比例）
+            const targetCanvasWidth = canvasWidth * ratio;
+            const targetCanvasHeight = canvasHeight * ratio;
+            // 计算图片宽高比和画布宽高比
+            const imgRatio = imgWidth / imgHeight;
+            const canvasRatio = targetCanvasWidth / targetCanvasHeight;
+            let drawWidth, drawHeight, drawX, drawY;
+
+            // 图片宽高比 > 画布宽高比：图片宽度撑满画布，高度按比例缩放
+            if (imgRatio > canvasRatio) {
+                drawWidth = targetCanvasWidth;
+                drawHeight = targetCanvasWidth / imgRatio;
+            } else {
+                // 图片宽高比 <= 画布宽高比：图片高度撑满画布，宽度按比例缩放
+                drawHeight = targetCanvasHeight;
+                drawWidth = targetCanvasHeight * imgRatio;
+            }
+
+            // 居中绘制
+            drawX = (canvasWidth - drawWidth) / 2;
+            drawY = (canvasHeight - drawHeight) / 2;
+
+            return {
+                width: drawWidth,
+                height: drawHeight,
+                x: drawX,
+                y: drawY
+            };
+        }
+
+        // ========== Canvas尺寸适配 ==========
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            ocas.width = canvas.width;
+            ocas.height = canvas.height;
+            // 重新绘制静态背景
+            drawStaticBg();
+        }
+
+        // ========== 音乐自动播放优化 ==========
+        function initMusic() {
+            const playMusic = () => {
+                music.play().catch(err => console.log("音乐播放失败：", err));
+                document.removeEventListener("click", playMusic);
+            };
+            iframMusic.onload = () => {
+                music.src = 'music.mp3';
+                music.oncanplay = () => {
+                    music.play().catch(() => {
+                        document.addEventListener("click", playMusic);
+                    });
+                };
+            };
+            document.addEventListener("click", playMusic, { once: true });
+        }
+
+        // ========== 静态背景绘制（离屏Canvas：只绘一次，优化性能） ==========
+        function drawStaticBg() {
+            staticBgCanvas.width = canvas.width;
+            staticBgCanvas.height = canvas.height;
+            staticBgCtx.clearRect(0, 0, staticBgCanvas.width, staticBgCanvas.height);
+
+            // 绘制星星
+            stars = [];
+            for (let i = 0; i < config.starCount; i++) {
+                const r = Math.random() * 1;
+                const x = Math.random() * staticBgCanvas.width;
+                const y = Math.random() * staticBgCanvas.height;
+                const star = new Star(x, y, r);
+                stars.push(star);
+                star.paint(staticBgCtx);
+            }
+
+            // 绘制月亮和光晕（减少光晕层数，优化性能）
+            drawMoon(staticBgCtx);
+        }
+
+        function drawMoon(drawCtx) {
+            const centerX = canvas.width - 200;
+            const centerY = 100;
+            const width = 80;
+            if (moonImg.complete) {
+                drawCtx.drawImage(moonImg, centerX, centerY, width, width);
+            } else {
+                moonImg.onload = () => {
+                    drawCtx.drawImage(moonImg, centerX, centerY, width, width);
+                };
+                moonImg.onerror = () => console.error("月亮图片加载失败");
+            }
+            // 月亮光晕：减少层数到3层，降低绘制开销
+            let index = 0;
+            for (let i = 0; i < 3; i++) {
+                drawCtx.save();
+                drawCtx.beginPath();
+                drawCtx.arc(centerX + width / 2, centerY + width / 2, width / 2 + index, 0, 2 * Math.PI);
+                drawCtx.fillStyle = "rgba(240,219,120,0.005)";
+                index += 4;
+                drawCtx.fill();
+                drawCtx.restore();
+            }
+        }
+
+        // ========== 工具函数 ==========
+        function getRandom(a, b) {
+            return Math.random() * (b - a) + a;
+        }
+
+        // ========== 星星类（简单绘制，性能开销小） ==========
+        class Star {
+            constructor(x, y, r) {
+                this.x = x;
+                this.y = y;
+                this.r = r;
+            }
+            paint(drawCtx) {
+                drawCtx.save();
+                drawCtx.beginPath();
+                drawCtx.arc(this.x, this.y, this.r, 0, 2 * Math.PI);
+                drawCtx.fillStyle = `rgba(255,255,255,${this.r})`;
+                drawCtx.fill();
+                drawCtx.restore();
+            }
+        }
+
+        // ========== 烟花碎片类（优化死亡条件，加速清理） ==========
+        class Frag {
+            constructor(centerX, centerY, radius, color, tx, ty) {
+                this.x = centerX; // 初始x（爆炸中心）
+                this.y = centerY; // 初始y（爆炸中心）
+                this.tx = tx; // 目标x
+                this.ty = ty; // 目标y
+                this.radius = radius; // 半径
+                this.color = color; // 颜色
+                this.dead = false; // 是否死亡
+            }
+
+            paint() {
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, 2 * Math.PI);
+                ctx.fillStyle = `rgba(${this.color.a},${this.color.b},${this.color.c},1)`;
+                ctx.fill();
+                ctx.restore();
+            }
+
+            moveTo() {
+                // 模拟重力下落（调大，加速碎片下落和清理）
+                this.ty += config.fragGravity;
+                const dx = this.tx - this.x;
+                const dy = this.ty - this.y;
+
+                // 缓动移动（调大速度，加快碎片到达目标）
+                this.x = Math.abs(dx) < 0.1 ? this.tx : (this.x + dx * config.fragSpeed);
+                this.y = Math.abs(dy) < 0.1 ? this.ty : (this.y + dy * config.fragSpeed);
+
+                // 优化死亡条件：要么到达目标，要么超出画布（加速清理大图片的碎片）
+                const isArrived = Math.abs(dx) < 0.1 && Math.abs(dy) <= 80;
+                const isOutOfCanvas = this.y > canvas.height + 100 || this.x < -100 || this.x > canvas.width + 100;
+                if (isArrived || isOutOfCanvas) {
+                    this.dead = true;
+                } else {
+                    this.paint(); // 未死亡则绘制
+                }
+            }
+        }
+
+        // ========== 烟花主类（适配大图片的坐标逻辑） ==========
+        class Boom {
+            constructor(x, r, c, boomArea, shape) {
+                this.x = x; // 初始x
+                this.y = canvas.height + r; // 初始y（画布底部）
+                this.r = r; // 半径
+                this.c = c; // 颜色
+                this.shape = shape || false; // 文字/图片形状
+                this.boomArea = boomArea; // 爆炸位置
+                this.dead = false; // 是否爆炸
+                this.ba = parseInt(getRandom(80, 200)); // 爆炸触发距离
+                this.booms = []; // 碎片数组
+            }
+
+            _paint() {
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.r, 0, 2 * Math.PI);
+                ctx.fillStyle = this.c;
+                ctx.fill();
+                ctx.restore();
+            }
+
+            _move() {
+                const dx = this.boomArea.x - this.x;
+                const dy = this.boomArea.y - this.y;
+                this.x += dx * 0.01;
+                this.y += dy * 0.01;
+
+                // 触发爆炸
+                if (Math.abs(dx) <= this.ba && Math.abs(dy) <= this.ba) {
+                    this.shape ? this._shapBoom() : this._boom();
+                    this.dead = true;
+                } else {
+                    this._paint();
+                    this._drawLight();
+                }
+            }
+
+            _drawLight() {
+                ctx.save();
+                ctx.fillStyle = "rgba(255,228,150,0.3)";
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.r + 3 * Math.random() + 1, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.restore();
+            }
+
+            // 普通烟花爆炸：大幅减少碎片数量，释放性能
+            _boom() {
+                const fragNum = parseInt(getRandom(...config.normalFragRange));
+                const style = getRandom(0, 10) >= 5 ? 1 : 2;
+                let color;
+
+                if (style === 1) {
+                    color = {
+                        a: parseInt(getRandom(128, 255)),
+                        b: parseInt(getRandom(128, 255)),
+                        c: parseInt(getRandom(128, 255))
+                    };
+                }
+
+                const fanwei = parseInt(getRandom(300, 400));
+                for (let i = 0; i < fragNum; i++) {
+                    if (style === 2) {
+                        color = {
+                            a: parseInt(getRandom(128, 255)),
+                            b: parseInt(getRandom(128, 255)),
+                            c: parseInt(getRandom(128, 255))
+                        };
+                    }
+
+                    const a = getRandom(-Math.PI, Math.PI);
+                    const tx = getRandom(0, fanwei) * Math.cos(a) + this.x;
+                    const ty = getRandom(0, fanwei) * Math.sin(a) + this.y;
+                    const radius = getRandom(0, 2);
+                    this.booms.push(new Frag(this.x, this.y, radius, color, tx, ty));
+                }
+            }
+
+            // 文字/图片烟花爆炸：适配大图片的坐标逻辑，保证显示
+            _shapBoom() {
+                const that = this;
+                putValue(ocas, octx, this.shape, config.baseFragStep, (dots) => {
+                    // 坐标修正：适配大图片的居中绘制，保证碎片在画布内
+                    const dx = canvas.width / 2 - that.x;
+                    const dy = canvas.height / 2 - that.y;
+                    for (let i = 0; i < dots.length; i++) {
+                        const color = {
+                            a: dots[i].a,
+                            b: dots[i].b,
+                            c: dots[i].c
+                        };
+                        const x = dots[i].x;
+                        const y = dots[i].y;
+                        const radius = 1;
+                        // 原坐标修正：因图片撑满画布，碎片显示范围也会覆盖整个屏幕
+                        const frag = new Frag(that.x, that.y, radius, color, x - dx, y - dy);
+                        that.booms.push(frag);
+                    }
+                });
+            }
+
+            // 处理碎片：清理死亡碎片，优化内存（解决卡顿的核心）
+            handleBooms() {
+                // 过滤死亡碎片，减少数组长度
+                this.booms = this.booms.filter(frag => !frag.dead);
+                // 遍历剩余碎片
+                for (let i = 0; i < this.booms.length; i++) {
+                    this.booms[i].moveTo();
+                }
+                // 碎片全部死亡时，返回true（表示烟花可被清理）
+                return this.booms.length === 0;
+            }
+        }
+
+        // ========== 像素提取函数（核心：图片撑满画布且不拉伸） ==========
+        function putValue(canvas, context, ele, dr, callback) {
+            context.clearRect(0, 0, canvas.width, canvas.height);
+            // 处理图片：撑满画布且不拉伸
+            if (ele.innerHTML.includes("img")) {
+                const imgElement = ele.querySelector("img");
+                const img = new Image();
+                // 网络图片跨域处理（本地图片无需）
+                if (imgElement.src.startsWith("http")) {
+                    img.crossOrigin = "anonymous";
+                }
+                img.src = imgElement.src;
+                img.onload = function () {
+                    // 计算图片撑满画布且不拉伸的尺寸（核心逻辑）
+                    const fitSize = getImageFitSize(
+                        this.width,
+                        this.height,
+                        canvas.width,
+                        canvas.height,
+                        config.imgScaleRatio // 图片占画布的比例（可改1）
+                    );
+                    // 绘制图片：按计算后的尺寸居中绘制，不拉伸且撑满屏幕
+                    context.drawImage(
+                        this,
+                        0, 0, this.width, this.height,
+                        fitSize.x, fitSize.y, fitSize.width, fitSize.height
+                    );
+                    // 动态调整像素步长：根据图片尺寸放大步长，避免像素点过多
+                    const dynamicStep = Math.max(dr, Math.ceil((fitSize.width + fitSize.height) / 1000));
+                    const dots = getimgData(canvas, context, dynamicStep);
+                    // 调试：查看提取的像素点数量（控制台可看）
+                    // console.log("图片像素点数量：", dots.length);
+                    callback(dots);
+                };
+                img.onerror = () => {
+                    console.error(`图片加载失败：${imgElement.src}`);
+                    callback([]);
+                };
+            } else {
+                // 处理文字：撑满画布且不拉伸（按画布尺寸调整字体）
+                const text = ele.textContent;
+                context.save();
+                // 动态计算字体大小：按画布高度的1/3，保证文字撑满屏幕且不拉伸
+                const fontSize = Math.min(canvas.height / 3, 300); // 限制最大字体为300px
+                context.font = `${fontSize}px 宋体 bold`;
+                context.textAlign = "center";
+                context.textBaseline = "middle";
+                context.fillStyle = `rgba(${parseInt(getRandom(128, 255))},${parseInt(getRandom(128, 255))},${parseInt(getRandom(128, 255))},1)`;
+                context.fillText(text, canvas.width / 2, canvas.height / 2);
+                context.restore();
+                // 动态调整像素步长：根据字体大小调整
+                const dynamicStep = Math.max(dr, Math.ceil(fontSize / 50));
+                const dots = getimgData(canvas, context, dynamicStep);
+                callback(dots);
+            }
+        }
+
+        // 提取像素数据：动态步长，平衡清晰度和性能
+        function getimgData(canvas, context, dr) {
+            const imgData = context.getImageData(0, 0, canvas.width, canvas.height);
+            const dots = [];
+            // 隔dr个像素取一个点，动态步长减少像素点数量
+            for (let x = 0; x < imgData.width; x += dr) {
+                for (let y = 0; y < imgData.height; y += dr) {
+                    const i = (y * imgData.width + x) * 4;
+                    // 只提取不透明像素
+                    if (imgData.data[i + 3] > 128) {
+                        dots.push({
+                            x, y,
+                            a: imgData.data[i],
+                            b: imgData.data[i + 1],
+                            c: imgData.data[i + 2]
+                        });
+                    }
+                }
+            }
+            return dots;
+        }
+
+        // ========== 动画主循环（核心：大幅提高图片烟花概率） ==========
+        let lastTime = Date.now();
+        function animate() {
+            // 1. 绘制静态背景（复用离屏Canvas，减少绘制开销）
+            ctx.drawImage(staticBgCanvas, 0, 0);
+
+            // 2. 绘制半透明遮罩，实现轨迹淡出
+            ctx.save();
+            ctx.fillStyle = `rgba(0,5,24,${config.maskOpacity})`;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.restore();
+
+            // 3. 定时生成烟花：间隔更短、图片烟花概率大幅提高（95%）
+            const now = Date.now();
+            if (now - lastTime > config.fireworkInterval && bigbooms.length < config.maxFireworks) {
+                // ========== 核心修改：提高图片烟花概率 ==========
+                // 选项1：95%图片/文字烟花，5%普通烟花（推荐）
+                const isNormal = Math.random() > 0.95;
+                // 选项2：90%图片/文字烟花，10%普通烟花（可替换上面的行）
+                // const isNormal = Math.random() > 0.9;
+                // 选项3：100%图片/文字烟花，0%普通烟花（直接注释上面的，用下面的行）
+                // const isNormal = false;
+
+                const x = getRandom(canvas.width / 5, canvas.width * 4 / 5);
+                const y = getRandom(50, 200);
+                let boom;
+
+                if (isNormal) {
+                    // 普通烟花（仅5%/10%概率，或0%）
+                    boom = new Boom(
+                        getRandom(canvas.width / 3, canvas.width * 2 / 3),
+                        2,
+                        "#FFF",
+                        { x, y }
+                    );
+                } else {
+                    // 文字/图片烟花（95%/90%/100%概率，频率极高）
+                    const randomIdx = parseInt(getRandom(0, shapeList.length));
+                    boom = new Boom(
+                        getRandom(canvas.width / 3, canvas.width * 2 / 3),
+                        2,
+                        "#FFF",
+                        { x: canvas.width / 2, y: 200 },
+                        shapeList[randomIdx]
+                    );
+                }
+                bigbooms.push(boom);
+                lastTime = now;
+            }
+
+            // 4. 处理烟花：清理无用对象，释放内存（解决卡顿的核心）
+            const newBigbooms = [];
+            for (let i = 0; i < bigbooms.length; i++) {
+                const boom = bigbooms[i];
+                if (!boom) continue;
+
+                if (!boom.dead) {
+                    // 未爆炸：移动烟花球
+                    boom._move();
+                    newBigbooms.push(boom);
+                } else {
+                    // 已爆炸：处理碎片，碎片全部死亡则不保留
+                    const isAllFragDead = boom.handleBooms();
+                    if (!isAllFragDead) {
+                        newBigbooms.push(boom);
+                    }
+                }
+            }
+            // 替换数组，清理无用烟花对象
+            bigbooms = newBigbooms;
+
+            // 5. 循环动画：使用原生requestAnimationFrame，性能最好
+            requestAnimationFrame(animate);
+        }
+
+        // ========== 初始化函数 ==========
+        function init() {
+            resizeCanvas();
+            window.addEventListener("resize", resizeCanvas);
+            initMusic();
+            animate();
+        }
+
+        // 页面加载完成后初始化
+        $(function () {
+            init();
+        });
+
+        // 保留modal函数（若不需要可删除）
+        function modal(content, callback) {
+            const tpl = `
+                <div class="container">
+                    <div class="mask"></div>
+                    <div class="modal">
+                        <p>${content}</p>
+                        <button type="button" id="confirm" class="confirm">确定</button>
+                    </div>
+                </div>
+            `;
+            $("body").append(tpl);
+            $(document).on("click", ".confirm", function () {
+                $(".container").remove();
+                callback && callback();
+            });
+        }
+    </script>
+</body>
+
+</html>
